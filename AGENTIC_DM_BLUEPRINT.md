@@ -20,7 +20,7 @@ The brain is Gemini. The hands are MCP servers. Keeping them separate buys you t
 
 1. **Determinism where it matters.** Dice, HP math, and the combat turn order must be exact and auditable — those live in code (MCP tools), not in the model's head. The model decides *what* to do; the tools decide *what actually happens*.
 2. **One tool layer, many consumers.** The same MCP servers serve the deployed orchestrator at runtime, and they can also be attached to Claude Code or Gemini CLI during development so you can exercise tools interactively before the UI exists.
-3. **Clean growth.** Adding a capability (a treasure-generator, an Imagen battle-map tool) means adding one MCP tool, not rewiring the agent.
+3. **Clean growth.** Adding a capability (a treasure-generator, a random-encounter table, a weather tracker) means adding one MCP tool, not rewiring the agent.
 
 **How Gemini talks to MCP (read this before you build).** The Gemini Gen AI SDKs have built-in MCP support in Python and JavaScript, and the Python SDK auto-executes tool calls and loops until the model finishes. Two current limits shape the design:
 
@@ -42,6 +42,7 @@ flowchart TD
         Party["Party panel (multi-PC sheets)"]
         Combat["Initiative / combat tracker"]
         Lore["Lore browser + module upload"]
+        MapUp["Map upload + library"]
         Settings["DM Behavior panel"]
         ModeToggle["Adventure / Collaboration toggle"]
     end
@@ -62,7 +63,6 @@ flowchart TD
         Mem["session-memory"]
         Rules["rules-rag"]
         World["world-lore"]
-        Maps["map-gen (Imagen, optional)"]
     end
 
     subgraph Data["GCP Data Layer"]
@@ -85,7 +85,7 @@ flowchart TD
     Rules --> VVS
     Rules --> Emb
     World --> FS
-    Maps --> GCS
+    MapUp -->|upload| GCS
     GCS -->|ingest pipeline| Emb
 ```
 
@@ -103,13 +103,13 @@ flowchart TD
 | Session-memory recall | **Firestore vector search (KNN)** | Small corpus, co-located with the events it indexes. No extra service to run. |
 | Rulebook RAG | **Firestore vectors to start; graduate to Vertex AI Vector Search** | Start cheap/simple; move the big corpus to Vector Search if recall/latency demands it. You've already done ~5k chunks on Vertex, so the path is known. |
 | Embeddings | **Vertex AI `text-embedding`** | Same platform; one auth story. |
-| Blobs | **Cloud Storage (GCS)** | Rulebook PDFs, uploaded modules, generated maps, exported transcripts. |
-| Battle maps (optional) | **Imagen via Vertex AI** | Reuse your existing map-gen prompt work directly — same Gemini/Vertex ecosystem, near-zero friction now. |
+| Blobs | **Cloud Storage (GCS)** | Rulebook PDFs, uploaded modules, uploaded maps, exported transcripts. |
+| Battle maps | **Uploaded by you, stored in GCS, shown in the UI** | Maps are created in your own external workflow (e.g. your Gemini/Imagen prompt-crafting) and uploaded; the app catalogs, displays, and overlays tokens on them. No AI generation in the runtime loop. |
 | Secrets | **Secret Manager** (minimal — Vertex uses ADC service-account auth) | Few secrets needed since Vertex auth is keyless. |
 | CI/CD | **GitHub + Cloud Build (or GitHub Actions) + Workload Identity Federation** | Keyless GitHub-to-GCP deploys to Cloud Run. |
 | Dev environment | **VS Code + Claude Code** (build) and **Gemini CLI** (runtime-faithful playtest) | Claude Code writes the app; Gemini is the runtime model. Both can attach the MCP servers for terminal testing. |
 
-> **Reuse note:** Your existing D&D DM Assistant already has the Vertex RAG ingestion pipeline, Imagen map generation, NPC/creature generation, and lore CRUD — all on Gemini/Vertex, so it lifts over with even less friction now that the runtime model is also Gemini. The new work is the MCP tool wrapping, the agent loop, the two modes, the combat state machine, and the solo multi-character handling.
+> **Reuse note:** Your existing D&D DM Assistant already has the Vertex RAG ingestion pipeline, NPC/creature generation, and lore CRUD — all on Gemini/Vertex, so they lift over with even less friction now that the runtime model is also Gemini. (Map generation stays in your separate external workflow; the app only stores and displays the results — see Sections 5 and 11.) The new work is the MCP tool wrapping, the agent loop, the two modes, the combat state machine, and the solo multi-character handling.
 
 ### The `LLMClient` adapter
 
@@ -153,7 +153,7 @@ Define these as logical servers. For deployment you can co-locate them into 2–
 ### `game-state` (reads/writes Firestore)
 - `get_party()` — all PCs (the solo player controls every one)
 - `get_character(id)` / `update_character(id, patch)` — HP, conditions, inventory, spell slots, XP
-- `get_scene()` / `set_scene(location, description, present_npcs)`
+- `get_scene()` / `set_scene(location, description, present_npcs)` — scene state also carries the **active map** reference (which uploaded map is in play); you choose it in the UI, and it is read-only to the AI
 - `add_inventory(id, item)` / `spend_resource(id, resource, n)`
 
 ### `session-memory` (event log + semantic recall; Firestore + embeddings)
@@ -172,10 +172,7 @@ Define these as logical servers. For deployment you can co-locate them into 2–
 - `get_lore(id)` / `search_lore(query)` — factions, NPCs, places (Gull's Reach, Anchor Bay, Tide's End, Ironshoal, Woodbank), quests, history
 - `list_modules()` / `get_module(id)` — uploaded/pre-written adventures available to draw from
 
-### `map-gen` (optional)
-- `generate_battle_map(prompt)` — calls Imagen, stores to GCS, returns a URL. Reuse your battle-map prompt template (orthographic, 5-ft grid, named art styles).
-
-> Keep tools **deterministic and side-effecting**. All narration and creative generation happens in the orchestrator's Gemini call, not inside tools. The one exception is well-scoped generation like `map-gen`.
+> Keep tools **deterministic and side-effecting**. All narration and creative generation happens in the orchestrator's Gemini call, not inside tools — and there are no generative tools at all. Maps are produced outside the app and uploaded; the AI only *reads* which map is active for the current scene (via `get_scene` / `get_combat_state`) so it can reference the layout and keep token positions within the grid. It never creates maps.
 
 ---
 
@@ -214,7 +211,7 @@ Free-text directives at the bottom let you write anything the structured fields 
 - No autonomous play; Gemini is a worldbuilding co-author and prep assistant.
 - Heavy use of `world-lore` CRUD: invent factions, NPCs, locations, plot hooks; refine The Shattered Meridian's canon; keep the campaign bible consistent.
 - An **upload area** for adventure suggestions or pre-written modules (PDF/markdown). Uploads go to GCS and through the ingestion pipeline into a separate **`modules`** namespace, so Adventure Mode can later pull from them via `get_module` / `search_rules`.
-- Gemini can balance encounters, draft read-aloud text, generate maps, and stitch your ideas into the existing lore — but it commits nothing to the live game state.
+- Gemini can balance encounters, draft read-aloud text, and stitch your ideas into the existing lore — but it commits nothing to the live game state. (Maps are made externally and uploaded, not generated here.)
 
 The mode is a flag the orchestrator reads. It changes (a) the system prompt, (b) which tools are emphasized, and (c) whether the AI is permitted to mutate live game state and advance the narrative.
 
@@ -244,6 +241,7 @@ Keep the model tier configurable per-turn through the adapter: route routine tur
 - `campaigns/{id}/encounters/{encId}` — combatants, initiative, turn cursor, round, grid positions
 - `campaigns/{id}/events/{eventId}` — append-only log `{type, summary, details, embedding, ts}`
 - `campaigns/{id}/lore/{loreId}` — `{type, name, body, embedding}`
+- `campaigns/{id}/maps/{mapId}` — uploaded-map registry: `{name, gcs_path, grid_w, grid_h, scene_tag, is_active}`
 - `campaigns/{id}/sessions/{sessionId}` — boundaries + auto-recap
 
 The `embedding` fields enable Firestore KNN for `recall` and `search_lore`. Game state and the event log both back the live UI through real-time listeners, so the party panel and combat tracker update without polling.
@@ -251,7 +249,7 @@ The `embedding` fields enable Firestore KNN for `recall` and `search_lore`. Game
 **Cloud Storage buckets**
 - `rulebooks/` — source PDFs (SRD, supplements)
 - `modules/` — uploaded/pre-written adventures
-- `maps/` — generated battle maps
+- `maps/` — uploaded battle maps (created in your external workflow)
 - `transcripts/` — exported session logs
 
 **Vector index for rules**
@@ -279,7 +277,8 @@ A React + Vite + TypeScript app (Tailwind) served from Cloud Run or Firebase Hos
 - **Input box + quick actions** — free text plus buttons (Roll, Attack, Cast, Help) and a per-PC selector so it's clear which character is acting.
 - **Party panel** — a card per PC (HP bar, conditions, key resources, inventory). The solo-player nerve center; click a card to make that PC the active actor.
 - **Combat tracker** — initiative list with the turn cursor, round counter, quick damage/condition controls; optional grid/map view fed by `set_position`.
-- **Scene/map viewer** — current location art + generated battle maps.
+- **Scene/map viewer** — displays the active uploaded map; in combat, overlays tokens on its grid using `set_position` coordinates.
+- **Map upload + library** — drag-drop a map image to GCS, tag it (name, grid dimensions, scene), browse your library, and pick which map is active for the current scene/encounter.
 - **Lore browser** (Collaboration) — searchable campaign bible with inline editing.
 - **Module upload** (Collaboration) — drag-drop into GCS + ingestion.
 - **Table Rules panel** — the DM behavior config editor.
@@ -306,8 +305,7 @@ agentic-dm/
 ├── mcp-servers/
 │   ├── mechanics/            # dice-mechanics + encounter
 │   ├── data/                 # game-state + session-memory + world-lore
-│   ├── rules/                # rules-rag
-│   └── maps/                 # map-gen (optional)
+│   └── rules/                # rules-rag
 ├── ingestion/                # Cloud Run job: chunk + embed + index
 ├── web/                      # React/Vite/TS UI
 └── .github/workflows/        # CI/CD to Cloud Run
@@ -355,7 +353,7 @@ agentic-dm/
 23. Scaffold the React app; build chat + streaming first.
 24. Add the party panel and combat tracker wired to Firestore listeners.
 25. Add the Table Rules panel, mode toggle, lore browser, and module upload.
-26. Add the scene/map viewer; wire `map-gen` if you want maps.
+26. Add the map upload + library and the scene/map viewer (upload to GCS, register grid dimensions in Firestore, select the active map, overlay tokens on its grid).
 
 ### Phase 7 — Ship it (1–2 days)
 27. Set up Workload Identity Federation for keyless GitHub → GCP auth.

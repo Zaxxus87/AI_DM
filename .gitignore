@@ -1,0 +1,39 @@
+# Node
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+venv*/
+.env*
+.pytest_cache/
+.mypy_cache/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# GCP / credentials
+.gcloud/
+credentials.json
+google-credentials.json
+
+# Build output
+dist/
+build/
+.out/
+coverage/
+coverage.*
+
+# OS files
+.DS_Store
+Thumbs.db

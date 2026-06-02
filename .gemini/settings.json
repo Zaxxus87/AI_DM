@@ -1,0 +1,4 @@
+{
+  "mcpServers": [],
+  "_comment": "Add MCP server entries used by Gemini CLI, e.g. { \"name\": \"dice-mechanics\", \"url\": \"https://...\" }"
+}

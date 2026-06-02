@@ -1,0 +1,4 @@
+{
+  "servers": [],
+  "_comment": "Add MCP server definitions here, e.g. { \"name\": \"dice-mechanics\", \"url\": \"https://...\", \"description\": \"Tool server for dice and mechanics\" }"
+}

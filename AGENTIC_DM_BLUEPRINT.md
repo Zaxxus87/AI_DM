@@ -1,6 +1,6 @@
 # Agentic Dungeon Master — Build Blueprint
 
-**A solo-player D&D 5e engine where one human runs the whole party and Gemini runs the world.**
+**A solo-player D&D 2024 (5.5e) engine where one human runs the whole party and Gemini runs the world.**
 
 Built on Google Cloud Platform, orchestrated with the Model Context Protocol (MCP), developed in VS Code with Claude Code, and shipped from GitHub.
 
@@ -8,9 +8,9 @@ Built on Google Cloud Platform, orchestrated with the Model Context Protocol (MC
 
 ## 1. What you're building (in one paragraph)
 
-A web app where you sit down alone, controlling Elira, Janos, JuJu, Rayden and the rest of the party, and an agentic **Gemini 3 Pro** acts as Dungeon Master: it narrates, voices every NPC, runs combat, rolls dice, looks up rules, remembers what happened three sessions ago, and tracks the state of the game. It has two gears — **Adventure Mode** (Gemini actively DMs a live session) and **Collaboration Mode** (you and Gemini build world lore and prep adventures together) — and a settings panel where you declare exactly how the DM should behave at the table.
+A web app where you sit down alone, controlling every member of the party, and an agentic **Gemini 3 Pro** acts as Dungeon Master: it narrates, voices every NPC, runs combat, rolls dice, looks up rules, remembers what happened three sessions ago, and tracks the state of the game. It has two gears — **Adventure Mode** (Gemini actively DMs a live session) and **Collaboration Mode** (you and Gemini build world lore and prep adventures together) — and a settings panel where you declare exactly how the DM should behave at the table.
 
-The architectural spine is **MCP**: every concrete capability the DM needs (roll a d20, look up a grappling rule, apply 8 damage to a goblin, recall what the party did in Woodbank) is a tool exposed by an MCP server. The orchestrator holds an MCP client session to those servers and hands the tools to Gemini, so the model decides *what* to do and the tools decide *what actually happens*.
+The architectural spine is **MCP**: every concrete capability the DM needs (roll a d20, look up a grappling rule, apply 8 damage to a goblin, recall what the party did two towns back) is a tool exposed by an MCP server. The orchestrator holds an MCP client session to those servers and hands the tools to Gemini, so the model decides *what* to do and the tools decide *what actually happens*.
 
 ---
 
@@ -158,18 +158,18 @@ Define these as logical servers. For deployment you can co-locate them into 2–
 
 ### `session-memory` (event log + semantic recall; Firestore + embeddings)
 - `log_event(type, summary, details)` — append-only; embed the summary
-- `recall(query, k)` — KNN over past event summaries ("what happened with Captain Garrett Rook?")
+- `recall(query, k)` — KNN over past event summaries ("what did the harbor master promise us last session?")
 - `get_recent(n)` — last N events for short-term continuity
 - `start_session()` / `end_session(recap)` — session boundaries + an auto-recap
 
 ### `rules-rag` (read-only knowledge)
-- `search_rules(query, k)` — KNN over the ingested rulebook chunks, returns text + source/page for citation
+- `search_rules(query, k)` — KNN over the ingested **2024-ruleset** chunks (SRD 5.2 plus any 2024 sourcebooks you own), returns text + source/page for citation
 - `get_statblock(name)` — pulls a monster/NPC stat block if present in the corpus
 - `get_reference(name)` — canonical quick references (conditions list, action economy, etc.) as a **tool**. (Gemini's MCP path reads tools but not MCP *resources*, so expose these as tools rather than resources.)
 
 ### `world-lore` (CRUD; heavy in Collaboration Mode)
 - `create_lore(type, name, body)` / `update_lore(id, patch)` / `delete_lore(id)`
-- `get_lore(id)` / `search_lore(query)` — factions, NPCs, places (Gull's Reach, Anchor Bay, Tide's End, Ironshoal, Woodbank), quests, history
+- `get_lore(id)` / `search_lore(query)` — factions, NPCs, places, quests, history
 - `list_modules()` / `get_module(id)` — uploaded/pre-written adventures available to draw from
 
 > Keep tools **deterministic and side-effecting**. All narration and creative generation happens in the orchestrator's Gemini call, not inside tools — and there are no generative tools at all. Maps are produced outside the app and uploaded; the AI only *reads* which map is active for the current scene (via `get_scene` / `get_combat_state`) so it can reference the layout and keep token positions within the grid. It never creates maps.
@@ -194,7 +194,7 @@ This is the "tell the AI how to behave" requirement. Store a per-campaign config
 | `house_rules` | free-text | E.g. "crits max the first die," flanking on/off |
 | `agency` | low / high | How much the AI improvises vs. waits for player input |
 
-Free-text directives at the bottom let you write anything the structured fields don't cover ("Lyra should stay nervous around water until her arc resolves").
+Free-text directives at the bottom let you write anything the structured fields don't cover ("recurring villains always keep an escape route and never fight to the death").
 
 ---
 
@@ -209,7 +209,7 @@ Free-text directives at the bottom let you write anything the structured fields 
 
 ### Collaboration Mode — you and Gemini prep the world
 - No autonomous play; Gemini is a worldbuilding co-author and prep assistant.
-- Heavy use of `world-lore` CRUD: invent factions, NPCs, locations, plot hooks; refine The Shattered Meridian's canon; keep the campaign bible consistent.
+- Heavy use of `world-lore` CRUD: invent factions, NPCs, locations, plot hooks; refine your campaign's canon; keep the campaign bible consistent.
 - An **upload area** for adventure suggestions or pre-written modules (PDF/markdown). Uploads go to GCS and through the ingestion pipeline into a separate **`modules`** namespace, so Adventure Mode can later pull from them via `get_module` / `search_rules`.
 - Gemini can balance encounters, draft read-aloud text, and stitch your ideas into the existing lore — but it commits nothing to the live game state. (Maps are made externally and uploaded, not generated here.)
 
@@ -247,7 +247,7 @@ Keep the model tier configurable per-turn through the adapter: route routine tur
 The `embedding` fields enable Firestore KNN for `recall` and `search_lore`. Game state and the event log both back the live UI through real-time listeners, so the party panel and combat tracker update without polling.
 
 **Cloud Storage buckets**
-- `rulebooks/` — source PDFs (SRD, supplements)
+- `rulebooks/` — source PDFs (SRD 5.2, supplements)
 - `modules/` — uploaded/pre-written adventures
 - `maps/` — uploaded battle maps (created in your external workflow)
 - `transcripts/` — exported session logs
@@ -273,7 +273,7 @@ This is the piece you can lift most directly from your existing assistant — it
 
 A React + Vite + TypeScript app (Tailwind) served from Cloud Run or Firebase Hosting.
 
-- **Chat transcript** — streamed narration; dice results and tool actions rendered as inline cards (e.g. "Janos: attack roll 18 → hit, 9 slashing").
+- **Chat transcript** — streamed narration; dice results and tool actions rendered as inline cards (e.g. "Fighter: attack roll 18 → hit, 9 slashing").
 - **Input box + quick actions** — free text plus buttons (Roll, Attack, Cast, Help) and a per-PC selector so it's clear which character is acting.
 - **Party panel** — a card per PC (HP bar, conditions, key resources, inventory). The solo-player nerve center; click a card to make that PC the active actor.
 - **Combat tracker** — initiative list with the turn cursor, round counter, quick damage/condition controls; optional grid/map view fed by `set_position`.
@@ -329,15 +329,15 @@ agentic-dm/
 
 ### Phase 2 — State & memory (2–3 days)
 9. Define the Firestore schema (Section 9).
-10. Build `game-state` (party, characters, scene). Seed it with your real party: Elira, Janos, Lyra Blackwood, JuJu, Rayden.
+10. Build `game-state` (party, characters, scene). Seed it with your party's characters.
 11. Build `session-memory` with `log_event` + KNN `recall`.
 12. Build `encounter` (the combat state machine) on top of `game-state`.
 13. Exercise all of it from the terminal: start an encounter, apply damage, recall an event.
 
 ### Phase 3 — Knowledge (2–3 days; reuse prior pipeline)
-14. Stand up the ingestion job; load the SRD and your rulebooks into the `rules` namespace.
+14. Stand up the ingestion job; load SRD 5.2 (the Creative Commons release of the 2024 rules) and any other 2024 rulebooks into the `rules` namespace.
 15. Build `rules-rag.search_rules` + `get_reference`, returning text + source/page.
-16. Build `world-lore` CRUD; import existing Shattered Meridian lore (Vandross, Dragontooth Mountains, the coastal towns, Woodbank's businesses).
+16. Build `world-lore` CRUD; import any campaign lore you already have.
 
 ### Phase 4 — The agentic orchestrator (3–5 days)
 17. FastAPI service: the `LLMClient` adapter with `GeminiClient` first; an MCP client connected to all servers.
@@ -361,7 +361,7 @@ agentic-dm/
 29. Lock down IAM (least privilege per service), set Cloud Run min instances to 0 to keep idle cost near zero, and turn on Vertex request logging.
 
 ### Phase 8 — Play and refine
-30. Run a real Shattered Meridian session solo. Tune the DM config, prompt assembler, and tool surface based on where the AI stumbles.
+30. Run a real session solo. Tune the DM config, prompt assembler, and tool surface based on where the AI stumbles.
 
 ---
 

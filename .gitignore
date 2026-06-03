@@ -1,8 +1,5 @@
 # Node
 node_modules/
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
 npm-debug.log*
 
 # Python
@@ -13,14 +10,13 @@ __pycache__/
 .Python
 venv/
 venv*/
-.env*
 .pytest_cache/
 .mypy_cache/
 
 # Environment
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # GCP / credentials
 .gcloud/
